@@ -1,0 +1,124 @@
+ public class CustomOrmReposotiry : IRepositoryDAL
+    {
+        private UnitOfWork db;
+        private int currentFieldId;
+
+        public CustomOrmReposotiry(string connectionString)
+        {
+            db = new UnitOfWork(connectionString);
+        } 
+
+        public FieldModel LoadField()
+        {
+            currentFieldId = GetLastFieldId();
+
+            var ships = db.Ships.GetByFilters(new List<Filter>() { new Filter() { Column = "FieldId", Value = currentFieldId, Operation = Operation.Equals } }).ToList();
+
+            var fieldModel = db.Fields.GetByFilters(new List<Filter>() { new Filter() { Column = "Id", Value = currentFieldId, Operation = Operation.Equals } }).FirstOrDefault().MapToFieldModel(ships);
+
+            return fieldModel;
+        }
+
+        public PlayersContainerModel LoadPlayersContainer()
+        {
+            currentFieldId = GetLastFieldId();
+
+            var playersId = db.Ships.GetByFilters(new List<Filter>() { new Filter() { Column = "FieldId", Value = currentFieldId, Operation = Operation.Equals } })
+                .Select(s => s.PlayerId);
+
+            List<PlayerModel> players = new List<PlayerModel>();
+            
+            if(playersId.Count() == 0) 
+            {
+                var playersIdWithShip = db.Ships.GetAll().Select(p=>p.PlayerId);
+                players = db.Players.GetAll().Where(s => !playersIdWithShip.Contains(s.Id)).Select(s=>s.MapToPlayerModel()).ToList();
+                currentFieldId = GetLastFieldId() + 1;
+            }
+            else
+            {
+                players = db.Players.GetAll()
+                    .Where(p => playersId.Contains(p.Id))
+                    .Select(p => p.MapToPlayerModel())
+                    .ToList();
+            }
+
+            return new PlayersContainerModel() { PlayersList = players};
+        }
+
+        public void SaveField(FieldModel field)
+        {
+            var game = db.Games.GetLastItem();
+
+            if (currentFieldId != 0)
+            {
+                foreach (var ship in field.Ships)
+                {
+                    db.Ships.Delete(ship.MapToShipORM(currentFieldId));
+                }
+
+                db.Games.Delete(game);
+                
+                db.Fields.Delete(field.MapToFieldORM(currentFieldId));
+            }
+
+            currentFieldId = db.Fields.GetLastItem().Id + 1;
+
+            db.Fields.Add(field.MapToFieldORM(currentFieldId));
+
+            db.Games.Add(new GameORM() {  Id = game.Id + 1, CurrentFieldId = currentFieldId });
+
+            List<ShipORM> ships = new List<ShipORM>();
+
+            ships.AddRange(field.Ships.Select(s => s.MapToShipORM(currentFieldId)));
+
+            var lastShip = db.Ships.GetLastItem();
+
+            var nextShipId = (lastShip == null ? 0 : lastShip.Id) + 1;
+
+            foreach(var ship in ships)
+            {
+                ship.Id = nextShipId;
+
+                nextShipId++;
+            }
+
+            db.Ships.Add(ships);
+
+            db.Save();
+        }
+
+        public void SavePlayersContainer(PlayersContainerModel playersContainer)
+        {
+
+            if (currentFieldId == 0)
+            {
+                var game = db.Games.GetLastItem();
+
+                db.Games.Delete(game);
+
+                var currentFieldId = db.Fields.GetLastItem().Id + 1;
+
+                db.Games.Add(new GameORM() { Id = game.Id + 1, CurrentFieldId = currentFieldId });
+            }
+
+            var nextPlayerId = db.Players.GetAll().LastOrDefault().Id + 1;
+            
+            List<PlayerORM> players = new List<PlayerORM>();
+
+            foreach(var player in playersContainer.PlayersList)
+            {
+                player.Id = nextPlayerId;
+                players.Add(player.MapToPlayerORM());
+                nextPlayerId++;
+            }
+
+            db.Players.Add(players);
+
+            db.Save();
+        }
+        
+        private int GetLastFieldId()
+        {
+            return db.Games.GetLastItem().CurrentFieldId;
+        }
+    }
